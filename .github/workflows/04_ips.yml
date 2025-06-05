@@ -1,4 +1,4 @@
-name: 04_GFWList 域名解析（多轮DNS服务器版）
+name: 04_解析 GFWList 域名
 
 on:
   schedule:
