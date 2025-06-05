@@ -1,4 +1,4 @@
-name: 04_定时解析 GFWList 域名到 IP（终极版）
+name: 04_定时解析 GFWList 域名到 IP（高成功率版）
 
 on:
   schedule:
@@ -34,7 +34,8 @@ jobs:
       - name: 解析域名获取 IP 地址
         run: |
           > gfwlist_ips.txt
-          dns_servers=("8.8.8.8" "1.1.1.1")
+          # 增加更多DNS服务器（8个公共DNS，提高成功率）
+          dns_servers=("8.8.8.8" "8.8.4.4" "1.1.1.1" "1.0.0.1" "9.9.9.9" "149.112.112.112" "84.200.69.80" "8.20.247.20")
           success_count=0
           fail_count=0
           
@@ -58,18 +59,23 @@ jobs:
             
             # 域名解析
             echo -n "行 $line_num: 解析域名 $entry..."
-            ips=$(dig +short +time=3 +tries=2 @${dns_servers[0]} "$entry" A 2>/dev/null)
+            ips=""
+            resolved=false
             
-            # 主服务器失败时尝试备用服务器
-            if [ -z "$ips" ]; then
-              ips=$(dig +short +time=3 +tries=2 @${dns_servers[1]} "$entry" A 2>/dev/null)
-            fi
+            # 尝试所有DNS服务器，直到解析成功
+            for dns in "${dns_servers[@]}"; do
+              ips=$(dig +short +time=5 +tries=3 @$dns "$entry" A 2>/dev/null)
+              if [ -n "$ips" ]; then
+                resolved=true
+                break
+              fi
+            done
             
-            if [ -n "$ips" ]; then
-              # 四层清理：移除所有无效字符（关键修复）
+            if [ "$resolved" = true ]; then
+              # 清理并分割IP（终极版清理）
               ip_list=$(echo "$ips" | 
-                        tr -d '\r\n\t' |       # 移除所有换行符和制表符
-                        sed 's/  */ /g' |       # 压缩多个空格为单个
+                        tr -d '\r\n\t' |       # 移除所有控制字符
+                        sed 's/  */ /g' |       # 压缩空格
                         sed 's/^ //; s/ $//')   # 移除首尾空格
               
               valid_ips=""
@@ -87,21 +93,20 @@ jobs:
                 echo " 成功 (${valid_ips//$'\n'/ })"
                 ((success_count++))
               else
-                echo " 失败（无有效IP）"
+                echo " 失败（解析出无效IP）"
                 ((fail_count++))
               fi
             else
-              echo " 失败"
+              echo " 失败（所有DNS均无法解析）"
               ((fail_count++))
             fi
             
-            sleep 0.5
+            sleep 1  # 增加延时，避免DNS服务器限制
           done < gfwlist_domains.txt
           
-          # 去重排序（最后一次格式验证）
+          # 去重排序（空文件处理）
           echo "==== 去重排序 IP ===="
-          if [ -f gfwlist_ips.txt ]; then
-            # 最终清理并去重
+          if [ -s gfwlist_ips.txt ]; then
             grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' gfwlist_ips.txt | 
             sort -u > temp.txt && mv temp.txt gfwlist_ips.txt
             
@@ -127,8 +132,12 @@ jobs:
           echo "IP文件包含 $ip_count 个有效IP，每行一个"
           
           # 显示前10个IP（验证格式）
-          echo "==== 前10个IP ===="
-          head -n 10 gfwlist_ips.txt
+          if [ $ip_count -gt 0 ]; then
+            echo "==== 前10个IP ===="
+            head -n 10 gfwlist_ips.txt
+          else
+            echo "警告：IP文件为空"
+          fi
           
       - name: 提交结果文件
         run: |
