@@ -1,4 +1,4 @@
-name: 定时解析 GFWList 域名到 IP
+name: 04_定时解析 GFWList 域名到 IP
 
 on:
   schedule:
