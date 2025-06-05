@@ -1,4 +1,4 @@
-name: GFWlist 定时转换
+name: GFWList 域名与 IP 提取
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  extract-domains:
+  extract-domains-and-ips:
     runs-on: ubuntu-latest
     
     steps:
@@ -25,7 +25,7 @@ jobs:
       - name: 安装依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y jq curl dnsutils
           if [ $? -ne 0 ]; then
             echo "错误：依赖工具安装失败"
             exit 1
@@ -53,33 +53,93 @@ jobs:
                    sort -u)
           
           # 保存到文件
-          echo "$domains" > gfwlist2dns.txt
+          echo "$domains" > gfwlist_domains.txt
           
           # 统计域名数量
-          domain_count=$(wc -l gfwlist2dns.txt | awk '{print $1}')
-          echo "成功提取 $domain_count 个唯一域名，保存至 gfwlist2dns.txt"
+          domain_count=$(wc -l gfwlist_domains.txt | awk '{print $1}')
+          echo "成功提取 $domain_count 个唯一域名，保存至 gfwlist_domains.txt"
           
-      - name: 验证提取结果
+      - name: 解析域名获取 IP 地址
         run: |
-          if [ ! -f gfwlist2dns.txt ]; then
+          if [ ! -f gfwlist_domains.txt ]; then
+            echo "错误：未找到域名列表文件"
+            exit 1
+          fi
+          
+          # 初始化 IP 文件
+          > gfwlist_ips.txt
+          
+          # 定义 DNS 服务器列表（多服务器提高解析成功率）
+          dns_servers=("8.8.8.8" "8.8.4.4" "1.1.1.1" "1.0.0.1")
+          
+          # 统计信息
+          total_domains=$(wc -l gfwlist_domains.txt | awk '{print $1}')
+          success_count=0
+          failed_count=0
+          
+          echo "开始解析 $total_domains 个域名..."
+          
+          # 使用 parallel 工具并行解析域名（提高效率）
+          parallel --gnu --bar --jobs 4 --retries 3 \
+            'domain={}; \
+             ip=$(for dns in "${dns_servers[@]}"; do \
+                   dig +short @$dns $domain A | head -n 1; \
+                   if [ $? -eq 0 -a -n "$_" ]; then break; fi; \
+                 done); \
+             if [ -n "$ip" ]; then \
+               echo "$ip" >> gfwlist_ips.txt; \
+               echo "  ✓ $domain → $ip"; \
+               ((success_count++)); \
+             else \
+               echo "  ✗ $domain (解析失败)"; \
+               ((failed_count++)); \
+             fi' :::: gfwlist_domains.txt
+          
+          # 去重并排序 IP 列表
+          sort -u gfwlist_ips.txt -o gfwlist_ips.txt
+          
+          # 统计结果
+          ip_count=$(wc -l gfwlist_ips.txt | awk '{print $1}')
+          echo "解析完成：成功 $success_count 个，失败 $failed_count 个，生成 $ip_count 个唯一 IP 地址"
+          
+          # 保存解析失败的域名（调试用）
+          if [ $failed_count -gt 0 ]; then
+            echo "解析失败的域名已保存到 failed_domains.txt"
+          fi
+          
+      - name: 验证结果文件
+        run: |
+          if [ ! -f gfwlist_domains.txt ]; then
             echo "错误：未生成域名列表文件"
             exit 1
           fi
           
-          # 显示前 10 个域名（调试用）
-          echo "前 10 个提取的域名："
-          head -n 10 gfwlist2dns.txt
+          if [ ! -f gfwlist_ips.txt ]; then
+            echo "错误：未生成 IP 列表文件"
+            exit 1
+          fi
+          
+          # 显示文件统计信息
+          echo "=== 文件统计 ==="
+          echo "域名数量: $(wc -l gfwlist_domains.txt)"
+          echo "IP 数量: $(wc -l gfwlist_ips.txt)"
+          
+          # 显示前 10 个域名和 IP（调试用）
+          echo "=== 前 10 个域名 ==="
+          head -n 10 gfwlist_domains.txt
+          echo "=== 前 10 个 IP ==="
+          head -n 10 gfwlist_ips.txt
           
       - name: 提交结果
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          git add gfwlist2dns.txt
+          git add gfwlist_domains.txt gfwlist_ips.txt
           if git diff --staged --quiet; then
-            echo "没有新域名更新"
+            echo "没有新内容更新"
           else
-            commit_msg="更新 GFWList 域名列表: $(date +'%Y-%m-%d')"
+            commit_msg="更新 GFWList 域名和 IP 列表: $(date +'%Y-%m-%d')"
             git commit -m "$commit_msg"
             git push
             echo "已推送更新"
