@@ -1,4 +1,4 @@
-name: GFWList 域名解析（优化版，不生成失败域名文件）
+name: 04_GFWList 域名解析（优化版，不生成失败域名文件）
 
 on:
   schedule:
