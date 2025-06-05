@@ -1,4 +1,4 @@
-name: GFWList 域名解析与 IP 生成（Google DNS 8.8.8.8）
+name: GFWList 多 DNS 并行解析优化
 
 on:
   schedule:
@@ -20,112 +20,95 @@ jobs:
             echo "错误：GFWList 下载失败"
             exit 1
           fi
-          echo "GFWList 下载完成"
           
       - name: 安装依赖工具
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
-          if [ $? -ne 0 ]; then
-            echo "错误：依赖工具安装失败"
-            exit 1
-          fi
-          echo "工具安装完成"
           
-      - name: Base64 解码并提取域名
+      - name: 解码并提取域名
         run: |
-          if [ ! -f gfwlist.txt ]; then
-            echo "错误：未找到 gfwlist.txt"
-            exit 1
-          fi
+          decoded_content=$(base64 -d gfwlist.txt)
+          echo "$decoded_content" | grep -E -o "[a-zA-Z0-9][-a-zA-Z0-9._~%+]*(\.[a-zA-Z0-9][-a-zA-Z0-9._~%+]*)+" | sort -u > domains.txt
           
-          # 解码 Base64 内容
-          decoded_content=$(base64 -d gfwlist.txt 2>/dev/null)
-          if [ $? -ne 0 ]; then
-            echo "错误：Base64 解码失败"
-            exit 1
-          fi
-          
-          # 提取域名（正则匹配常见格式）
-          echo "$decoded_content" | grep -E -o "[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+" | sort -u > domains.txt
-          domain_count=$(wc -l domains.txt | awk '{print $1}')
-          echo "成功提取 $domain_count 个域名，保存至 domains.txt"
-          
-      - name: 通过 Google DNS (8.8.8.8) 解析域名
+      - name: 过滤非法域名
         run: |
-          if [ ! -f domains.txt ] || [ $(wc -l domains.txt) -eq 0 ]; then
-            echo "警告：未找到可解析的域名，跳过解析"
-            touch ip_list.txt
-            exit 0
-          fi
+          grep -E '^[a-zA-Z0-9][-a-zA-Z0-9._~%+]*(\.[a-zA-Z0-9][-a-zA-Z0-9._~%+]*)+$' domains.txt > valid_domains.txt
+          mv valid_domains.txt domains.txt
           
-          # 初始化计数器和 IP 列表
+      - name: 多 DNS 并行解析域名
+        run: |
+          dns_servers=("8.8.8.8" "8.8.4.4" "1.1.1.1" "1.0.0.1")
           count=0
           > ip_list.txt
           
-          echo "开始解析域名，共 $(wc -l domains.txt | awk '{print $1}') 个"
+          domain_count=$(wc -l domains.txt | awk '{print $1}')
+          echo "开始解析 $domain_count 个域名，使用多 DNS 并行策略"
           
-          # 遍历域名并解析（每 50 个域名暂停 15 秒，避免 API 限制）
           while read -r domain; do
             count=$((count+1))
-            
             if [ -n "$domain" ]; then
               echo "解析第 $count 个域名: $domain"
+              all_ips=""
+              responses=()
               
-              # 使用 Google DNS-over-HTTPS API 解析 A 记录
-              response=$(curl -s "https://8.8.8.8/resolve?name=$domain&type=A" -H "accept: application/dns-json")
+              # 并行发送解析请求
+              for server in "${dns_servers[@]}"; do
+                if [[ $server == 8.8.8.8 || $server == 8.8.4.4 ]]; then
+                  response=$(curl -s "https://dns.google/resolve?name=$domain&type=A" -H "accept: application/dns-json" --max-time 3 &)
+                else
+                  response=$(curl -s "https://$server/dns-query?name=$domain&type=A" -H "accept: application/dns-json" --max-time 3 &)
+                fi
+                responses[$server]=$response
+              done
               
-              if [ $? -ne 0 ]; then
-                echo "  curl 请求失败，跳过此域名"
-                continue
-              fi
+              wait  # 等待所有请求完成
               
-              # 提取 IP 地址
-              ips=$(echo "$response" | jq -r '.Answer[].data' 2>/dev/null)
+              # 合并结果
+              for server in "${dns_servers[@]}"; do
+                resp=${responses[$server]}
+                if [ -n "$resp" ]; then
+                  if [[ $server == 8.8.8.8 || $server == 8.8.4.4 ]]; then
+                    ips=$(echo "$resp" | jq -r '.Answer[].data // empty')
+                  else
+                    ips=$(echo "$resp" | jq -r '.Answer[].data // empty')
+                  fi
+                  if [ "$ips" != "empty" ]; then
+                    all_ips="$all_ips $ips"
+                  fi
+                fi
+              done
               
-              if [ -n "$ips" ]; then
-                echo "$ips" | tr '\n' ' ' | sed 's/ /\n/g' >> ip_list.txt
-                echo "  解析成功，IP: $ips"
+              # 去重并保存
+              unique_ips=$(echo "$all_ips" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+              if [ -n "$unique_ips" ]; then
+                echo "$unique_ips" | tr ' ' '\n' >> ip_list.txt
+                echo "  解析成功，IP: $unique_ips"
               else
-                echo "  无法解析域名 $domain，响应内容: $response"
+                echo "  所有 DNS 均无法解析 $domain"
               fi
             fi
             
-            # 频率控制：每 50 个域名暂停 15 秒
-            if [ $((count % 50)) -eq 0 ]; then
-              echo "  解析暂停 15 秒，避免 API 频率限制（已解析 $count 个）"
+            # 频率控制
+            if [ $((count % 20)) -eq 0 ]; then
+              echo "  暂停 15 秒，控制并发频率"
               sleep 15
             fi
           done < domains.txt
           
-          # 对 IP 去重并排序
           sort -u ip_list.txt > temp.txt && mv temp.txt ip_list.txt
-          ip_count=$(wc -l ip_list.txt | awk '{print $1}')
-          echo "解析完成，共获得 $ip_count 个 IP 地址"
+          echo "解析完成，共获得 $(wc -l ip_list.txt) 个 IP"
           
-      - name: 生成 IP 段列表
+      - name: 生成 IP 段
         run: |
-          if [ ! -f ip_list.txt ] || [ $(wc -l ip_list.txt) -eq 0 ]; then
-            echo "警告：无 IP 地址可生成网段，跳过此步骤"
-            touch ip_ranges.txt
-            exit 0
-          fi
-          
-          # 将 IP 转换为 /24 网段（可修改为 /16 等精度）
           awk -F. '{print $1"."$2"."$3".0/24"}' ip_list.txt | sort -u > ip_ranges.txt
-          range_count=$(wc -l ip_ranges.txt | awk '{print $1}')
-          echo "生成 $range_count 个 IP 段，保存至 ip_ranges.txt"
           
       - name: 提交结果
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          git add domains.txt ip_list.txt ip_ranges.txt
+          git add ip_list.txt ip_ranges.txt
           if git diff --staged --quiet; then
-            echo "没有新 IP 地址更新"
+            echo "无更新"
           else
-            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d')"
-            git commit -m "$commit_msg"
+            git commit -m "更新 IP 列表 $(date)"
             git push
           fi
