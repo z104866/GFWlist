@@ -73,7 +73,7 @@ jobs:
               echo "解析第 $count 个域名: $domain"
               
               # 使用 Google DNS-over-HTTPS API 解析 A 记录
-              response=$(curl -s "https://dns.google/resolve?name=$domain&type=A" -H "accept: application/dns-json")
+              response=$(curl -s "https://8.8.8.8/resolve?name=$domain&type=A" -H "accept: application/dns-json")
               
               if [ $? -ne 0 ]; then
                 echo "  curl 请求失败，跳过此域名"
