@@ -1,5 +1,4 @@
 name: 04_解析 GFWList
-
 on:
   schedule:
     - cron: '30 20 * * *'  # UTC 20:30 = 北京时间 04:30
@@ -40,6 +39,11 @@ jobs:
               { name: '第二轮', servers: ['9.9.9.9', '208.67.222.222'] },
               { name: '第三轮', servers: ['223.5.5.5', '8.8.4.4'] }
             ];
+            
+            // 所有DNS服务器IP集合（用于后续过滤）
+            const dnsServerIps = new Set([
+              '1.1.1.1', '8.8.8.8', '9.9.9.9', '208.67.222.222', '223.5.5.5', '8.8.4.4'
+            ]);
             
             console.log(\`开始解析 \${domains.length} 个域名，每轮50个域名，2秒超时\`);
             
@@ -82,11 +86,9 @@ jobs:
                       const addresses = await resolveWithTimeout(domain, server);
                       for (const ip of addresses) roundIps.add(ip);
                       roundSuccess++;
-                      // console.log(\`  ✓ 解析成功: \${domain} → \${addresses.join(', ')} (服务器: \${server})\`); // 可选：显示成功详情
                       return;
                     } catch (error) {
                       roundFail++;
-                      // console.log(\`  ✗ 解析失败 (\${server}): \${domain} → \${error.message}\`); // 可选：显示失败详情
                     }
                   }
                 }));
@@ -115,6 +117,14 @@ jobs:
                 ips.forEach(ip => allIps.add(ip));
               });
               
+              console.log(\`\n==== 解析完成，开始过滤DNS服务器IP ====\`);
+              
+              // 过滤掉所有DNS服务器IP
+              const filteredIps = [...allIps].filter(ip => !dnsServerIps.has(ip));
+              const filteredCount = allIps.size - filteredIps.length;
+              
+              console.log(\`过滤了 \${filteredCount} 个DNS服务器IP\`);
+              
               // 读取现有IP并去重
               let existingIps = new Set();
               if (fs.existsSync('gfwlist_ips.txt')) {
@@ -122,22 +132,27 @@ jobs:
                 existingIps = new Set(existingContent.split('\\n').filter(ip => ip.trim()));
               }
               
-              // 计算新增IP
-              const newIps = [...allIps].filter(ip => !existingIps.has(ip));
+              // 合并并去重（包括过滤后的新IP和现有IP）
+              const mergedIps = new Set([...existingIps, ...filteredIps]);
+              
+              // 计算新增IP（已过滤DNS服务器IP）
+              const newIps = [...mergedIps].filter(ip => !existingIps.has(ip));
               
               // 写入IP文件（追加新IP）
               if (newIps.length > 0) {
                 fs.appendFileSync('gfwlist_ips.txt', newIps.length > 0 ? '\\n' + newIps.join('\\n') : '');
-                console.log(\`\n追加 \${newIps.length} 个新IP到文件\`);
+                console.log(\`追加 \${newIps.length} 个新IP到文件（已过滤DNS服务器IP）\`);
               } else {
-                console.log(\`\n没有新IP需要追加\`);
+                console.log(\`没有新IP需要追加\`);
               }
               
-              console.log(\`\n==== 总解析统计 ====\`);
+              console.log(\`\n==== 最终统计 ====\`);
               console.log(\`  总成功: \${totalSuccess} 个域名\`);
               console.log(\`  总失败: \${totalFail} 个域名\`);
-              console.log(\`  新增IP: \${newIps.length} 个\`);
-              console.log(\`  总IP数量: \${allIps.size} 个\`);
+              console.log(\`  解析IP总数: \${allIps.size} 个\`);
+              console.log(\`  过滤DNS服务器IP: \${filteredCount} 个\`);
+              console.log(\`  新增有效IP: \${newIps.length} 个\`);
+              console.log(\`  最终IP数量: \${mergedIps.size} 个\`);
             }
             
             runRounds()
