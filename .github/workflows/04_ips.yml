@@ -1,4 +1,4 @@
-name: 04_解析 GFWList
+name: 解析 GFWList
 
 on:
   schedule:
@@ -18,61 +18,10 @@ jobs:
         with:
           node-version: '18'
           
-      - name: 下载GFWList原始文件
-        run: |
-          curl -sSL https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt -o gfwlist_original.txt
-          if [ ! -s gfwlist_original.txt ]; then
-            echo "错误：GFWList下载失败"
-            exit 1
-          fi
-          echo "GFWList下载完成"
-          
-      - name: 解码GFWList
-        run: |
-          if [ ! -f gfwlist_original.txt ]; then
-            echo "错误：未找到原始文件"
-            exit 1
-          fi
-          base64 -d gfwlist_original.txt > gfwlist_decoded.txt 2>/dev/null
-          if [ ! -s gfwlist_decoded.txt ]; then
-            echo "错误：Base64解码失败"
-            exit 1
-          fi
-          echo "解码完成"
-          
-      - name: 提取域名
-        run: |
-          if [ ! -f gfwlist_decoded.txt ]; then
-            echo "错误：未找到解码文件"
-            exit 1
-          fi
-          
-          node -e "
-            const fs = require('fs');
-            const content = fs.readFileSync('gfwlist_decoded.txt', 'utf-8');
-            const lines = content.split('\\n');
-            const domains = new Set();
-            
-            for (const line of lines) {
-              if (!line.trim() || line.startsWith('!') || line.startsWith('[') || line.startsWith('@@')) continue;
-              
-              let domain = line.replace('||', '').replace('|', '').split('/')[0].trim();
-              domain = domain.replace('*.', '');
-              const match = domain.match(/[a-zA-Z0-9][-a-zA-Z0-9._]*\\.[a-zA-Z]{2,}$/);
-              
-              if (match) {
-                domains.add(match[0]);
-              }
-            }
-            
-            fs.writeFileSync('gfwlist_domains.txt', [...domains].sort().join('\\n'));
-            console.log(\`提取完成，域名数量: \${domains.size}\`);
-          "
-          
       - name: 解析域名获取IP（多轮DNS服务器）
         run: |
           if [ ! -f gfwlist_domains.txt ]; then
-            echo "错误：未找到域名文件"
+            echo "错误：未找到 gfwlist_domains.txt，请先提取域名"
             exit 1
           fi
           
@@ -88,8 +37,8 @@ jobs:
             // 三轮DNS服务器配置
             const dnsRounds = [
               { name: '第一轮', servers: ['1.1.1.1', '8.8.8.8'] },
-              { name: '第二轮', servers: ['9.9.9.9', '208.67.222.222'] }, // OpenDNS
-              { name: '第三轮', servers: ['223.5.5.5', '8.8.4.4'] }      // 阿里DNS + Google备用
+              { name: '第二轮', servers: ['9.9.9.9', '208.67.222.222'] },
+              { name: '第三轮', servers: ['223.5.5.5', '8.8.4.4'] }
             ];
             
             console.log(\`开始解析 \${domains.length} 个域名，每轮50个域名，2秒超时\`);
@@ -133,11 +82,11 @@ jobs:
                       const addresses = await resolveWithTimeout(domain, server);
                       for (const ip of addresses) roundIps.add(ip);
                       roundSuccess++;
-                      console.log(\`  ✓ 解析成功: \${domain} → \${addresses.join(', ')} (服务器: \${server})\`);
+                      // console.log(\`  ✓ 解析成功: \${domain} → \${addresses.join(', ')} (服务器: \${server})\`); // 可选：显示成功详情
                       return;
                     } catch (error) {
                       roundFail++;
-                      // console.log(\`  ✗ 解析失败 (\${server}): \${domain} → \${error.message}\`); // 可选：取消注释显示失败详情
+                      // console.log(\`  ✗ 解析失败 (\${server}): \${domain} → \${error.message}\`); // 可选：显示失败详情
                     }
                   }
                 }));
@@ -175,11 +124,10 @@ jobs:
               
               // 计算新增IP
               const newIps = [...allIps].filter(ip => !existingIps.has(ip));
-              const finalIps = [...existingIps, ...newIps];
               
               // 写入IP文件（追加新IP）
               if (newIps.length > 0) {
-                fs.appendFileSync('gfwlist_ips.txt', '\\n' + newIps.join('\\n'));
+                fs.appendFileSync('gfwlist_ips.txt', newIps.length > 0 ? '\\n' + newIps.join('\\n') : '');
                 console.log(\`\n追加 \${newIps.length} 个新IP到文件\`);
               } else {
                 console.log(\`\n没有新IP需要追加\`);
