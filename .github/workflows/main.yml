@@ -1,4 +1,4 @@
-name: GFWList 域名解析与 IP 生成（DNS 1.1.1.1）
+name: GFWList 域名解析与 IP 生成（优化版）
 
 on:
   schedule:
@@ -16,60 +16,114 @@ jobs:
       - name: 下载 GFWList
         run: |
           wget -q https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt -O gfwlist.txt
-          echo "GFWList 下载完成"
+          if [ $? -ne 0 ]; then
+            echo "错误：GFWList 下载失败"
+            exit 1
+          fi
+          echo "GFWList 下载完成，路径：$(pwd)/gfwlist.txt"
           
       - name: 安装依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl  # 用于 JSON 处理和 HTTP 请求
+          sudo apt-get install -y jq curl
+          if [ $? -ne 0 ]; then
+            echo "错误：依赖工具安装失败"
+            exit 1
+          fi
           echo "工具安装完成"
           
       - name: Base64 解码并提取域名
         run: |
+          if [ ! -f gfwlist.txt ]; then
+            echo "错误：未找到 gfwlist.txt"
+            exit 1
+          fi
+          
           # 解码 Base64 内容
-          decoded_content=$(base64 -d gfwlist.txt)
+          decoded_content=$(base64 -d gfwlist.txt 2>/dev/null)
+          if [ $? -ne 0 ]; then
+            echo "错误：Base64 解码失败"
+            exit 1
+          fi
           
           # 提取域名（正则匹配常见格式）
           echo "$decoded_content" | grep -E -o "[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+" | sort -u > domains.txt
-          
-          # 统计域名数量
           domain_count=$(wc -l domains.txt | awk '{print $1}')
           echo "成功提取 $domain_count 个域名，保存至 domains.txt"
           
-      - name: 通过 DNS 1.1.1.1 解析域名
+      - name: 通过 DNS 1.1.1.1 解析域名（优化版）
         run: |
-          # 初始化 IP 列表
+          if [ ! -f domains.txt ] || [ $(wc -l domains.txt) -eq 0 ]; then
+            echo "警告：未找到可解析的域名，跳过解析"
+            touch ip_list.txt
+            exit 0
+          fi
+          
+          # 初始化计数器和 IP 列表
+          count=0
           > ip_list.txt
           
-          # 遍历域名并解析
+          echo "开始解析域名，共 $(wc -l domains.txt | awk '{print $1}') 个"
+          
+          # 遍历域名并解析（每 50 个域名暂停 15 秒，避免 API 限制）
           while read -r domain; do
+            count=$((count+1))
+            
             if [ -n "$domain" ]; then
-              # 使用 DNS 1.1.1.1 API 解析 A 记录（JSON 格式）
+              echo "解析第 $count 个域名: $domain"
+              
+              # 使用 DNS 1.1.1.1 API 解析 A 记录
               response=$(curl -s "https://1.1.1.1/dns-query?name=$domain&type=A" -H "accept: application/dns-json")
+              
+              if [ $? -ne 0 ]; then
+                echo "  curl 请求失败，跳过此域名"
+                continue
+              fi
               
               # 提取 IP 地址
               ips=$(echo "$response" | jq -r '.Answer[].data' 2>/dev/null)
               
               if [ -n "$ips" ]; then
                 echo "$ips" | tr '\n' ' ' | sed 's/ /\n/g' >> ip_list.txt
-                echo "解析域名 $domain 获得 IP: $ips"
+                echo "  解析成功，IP: $ips"
               else
-                echo "无法解析域名 $domain"
+                echo "  无法解析域名 $domain，响应内容: $response"
               fi
+            fi
+            
+            # 频率控制：每 50 个域名暂停 15 秒
+            if [ $((count % 50)) -eq 0 ]; then
+              echo "  解析暂停 15 秒，避免 API 频率限制（已解析 $count 个）"
+              sleep 15
             fi
           done < domains.txt
           
           # 对 IP 去重并排序
           sort -u ip_list.txt > temp.txt && mv temp.txt ip_list.txt
           ip_count=$(wc -l ip_list.txt | awk '{print $1}')
-          echo "共解析出 $ip_count 个 IP 地址"
+          echo "解析完成，共获得 $ip_count 个 IP 地址"
           
       - name: 生成 IP 段列表
         run: |
-          # 将 IP 转换为 /24 网段（可调整为 /16 等精度）
+          if [ ! -f ip_list.txt ] || [ $(wc -l ip_list.txt) -eq 0 ]; then
+            echo "警告：无 IP 地址可生成网段，跳过此步骤"
+            touch ip_ranges.txt
+            exit 0
+          fi
+          
+          # 将 IP 转换为 /24 网段（可修改为 /16 等精度）
           awk -F. '{print $1"."$2"."$3".0/24"}' ip_list.txt | sort -u > ip_ranges.txt
           range_count=$(wc -l ip_ranges.txt | awk '{print $1}')
           echo "生成 $range_count 个 IP 段，保存至 ip_ranges.txt"
+          
+      - name: 查看结果文件（调试用）
+        run: |
+          echo "==== domains.txt 前 5 个域名 ===="
+          head -n 5 domains.txt
+          echo "==== ip_list.txt 前 5 个 IP ===="
+          head -n 5 ip_list.txt
+          echo "==== ip_ranges.txt 前 5 个网段 ===="
+          head -n 5 ip_ranges.txt
           
       - name: 提交结果
         run: |
@@ -78,9 +132,16 @@ jobs:
           
           git add domains.txt ip_list.txt ip_ranges.txt
           if git diff --staged --quiet; then
-            echo "没有新 IP 地址更新"
+            echo "没有新 IP 地址更新，跳过提交"
           else
-            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d')"
+            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d %H:%M')"
             git commit -m "$commit_msg"
-            git push
+            
+            # 处理可能的推送错误
+            if git push 2>&1 | grep -q "permission denied"; then
+              echo "错误：推送权限不足，请检查 Actions 权限或 PAT 配置"
+              exit 1
+            fi
+            
+            echo "已推送更新：$commit_msg"
           fi
