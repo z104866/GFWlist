@@ -1,4 +1,4 @@
-name: 01_定时下载 GFWList 原始文件
+name: 01_下载 GFWList
 
 on:
   schedule:
