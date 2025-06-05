@@ -1,4 +1,4 @@
-name: 04_定时解析 GFWList 域名到 IP（终极稳定版）
+name: 04_GFWList 域名解析（Node.js版）
 
 on:
   schedule:
@@ -6,135 +6,139 @@ on:
   workflow_dispatch:
 
 jobs:
-  resolve-gfwlist:
+  resolve-dns:
     runs-on: ubuntu-latest
     
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         
-      - name: 安装 DNS 解析工具
+      - name: 安装Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: 下载GFWList原始文件
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dnsutils
-          if [ $? -ne 0 ]; then
-            echo "错误：工具安装失败"
+          curl -sSL https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt -o gfwlist_original.txt
+          if [ ! -s gfwlist_original.txt ]; then
+            echo "错误：GFWList下载失败"
+            exit 1
+          fi
+          echo "GFWList下载完成"
+          
+      - name: 解码GFWList
+        run: |
+          if [ ! -f gfwlist_original.txt ]; then
+            echo "错误：未找到原始文件"
+            exit 1
+          fi
+          base64 -d gfwlist_original.txt > gfwlist_decoded.txt 2>/dev/null
+          if [ ! -s gfwlist_decoded.txt ]; then
+            echo "错误：Base64解码失败"
+            exit 1
+          fi
+          echo "解码完成"
+          
+      - name: 提取域名
+        run: |
+          if [ ! -f gfwlist_decoded.txt ]; then
+            echo "错误：未找到解码文件"
             exit 1
           fi
           
-      - name: 检查域名文件是否存在
+          # 提取域名（Node.js实现）
+          node -e "
+            const fs = require('fs');
+            const content = fs.readFileSync('gfwlist_decoded.txt', 'utf-8');
+            const lines = content.split('\\n');
+            const domains = new Set();
+            
+            for (const line of lines) {
+              if (!line.trim() || line.startsWith('!') || line.startsWith('[') || line.startsWith('@@')) continue;
+              
+              // 处理规则格式
+              let domain = line.replace('||', '').replace('|', '').split('/')[0].trim();
+              // 移除通配符前缀
+              domain = domain.replace('*.', '');
+              // 提取有效域名
+              const match = domain.match(/[a-zA-Z0-9][-a-zA-Z0-9._]*\\.[a-zA-Z]{2,}$/);
+              
+              if (match) {
+                domains.add(match[0]);
+              }
+            }
+            
+            fs.writeFileSync('gfwlist_domains.txt', [...domains].sort().join('\\n'));
+            console.log(\`提取完成，域名数量: \${domains.size}\`);
+          "
+          
+      - name: 解析域名获取IP（Node.js版）
         run: |
           if [ ! -f gfwlist_domains.txt ]; then
-            echo "错误：未找到 gfwlist_domains.txt，请先提取域名和IP"
-            exit 1
-          fi
-          domain_count=$(wc -l gfwlist_domains.txt | awk '{print $1}')
-          echo "找到 $domain_count 个待解析条目"
-          
-      - name: 解析域名获取 IP 地址
-        run: |
-          # 初始化文件和计数器
-          > gfwlist_ips.txt
-          dns_servers=("8.8.8.8" "8.8.4.4" "1.1.1.1" "1.0.0.1" "9.9.9.9" "149.112.112.112" "84.200.69.80" "8.20.247.20")
-          success_count=0
-          fail_count=0
-          start_time=$(date +%s)
-          
-          echo "开始解析，使用 DNS 服务器: ${dns_servers[*]}"
-          
-          line_num=0
-          while IFS= read -r entry; do
-            line_num=$((line_num+1))
-            if [ -z "$entry" ]; then 
-              echo "行 $line_num: 空行，跳过"
-              continue 
-            fi
-            
-            # 记录开始解析时间
-            echo "--- 行 $line_num: 开始解析 $entry ---"
-            
-            # 处理IP地址
-            if [[ $entry =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-              echo "$entry" >> gfwlist_ips.txt
-              echo "行 $line_num: ✓ 直接添加 IP: $entry"
-              ((success_count++))
-              continue
-            fi
-            
-            # 域名解析（带详细时间记录）
-            echo -n "行 $line_num: 解析域名 $entry... "
-            ips=""
-            resolved=false
-            dns_time=()
-            
-            # 尝试所有DNS服务器，记录响应时间
-            for dns in "${dns_servers[@]}"; do
-              dns_start=$(date +%s)
-              ips=$(dig +short +time=8 +tries=4 @$dns "$entry" A 2>/dev/null)
-              dns_end=$(date +%s)
-              dns_time+=($((dns_end - dns_start)))
-              
-              if [ -n "$ips" ]; then
-                resolved=true
-                break
-              fi
-            done
-            
-            # 显示各DNS服务器响应时间
-            dns_times=""
-            for i in "${!dns_servers[@]}"; do
-              dns_times="$dns_times ${dns_servers[i]}: ${dns_time[i]}s"
-            done
-            echo "DNS时间: $dns_times"
-            
-            if [ "$resolved" = true ]; then
-              # 清理并验证IP
-              ip_list=$(echo "$ips" | tr -d '\r\n\t' | sed 's/  */ /g' | sed 's/^ //; s/ $//')
-              valid_ips=$(echo "$ip_list" | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
-              
-              if [ -n "$valid_ips" ]; then
-                echo "$valid_ips" >> gfwlist_ips.txt
-                echo " 成功 ($valid_ips)"
-                ((success_count++))
-              else
-                echo " 失败（解析出无效IP）"
-                ((fail_count++))
-              fi
-            else
-              echo " 失败（所有DNS均超时或无响应）"
-              ((fail_count++))
-            fi
-            
-            sleep 1.5  # 增加延时，避免DNS服务器并发限制
-          done < gfwlist_domains.txt
-          
-          # 去重排序（带完整错误处理）
-          echo "==== 去重排序 IP ===="
-          if [ -f gfwlist_ips.txt ]; then
-            if [ -s gfwlist_ips.txt ]; then
-              sort -u gfwlist_ips.txt > temp.txt
-              if [ $? -ne 0 ]; then
-                echo "错误：sort 去重失败，文件内容："
-                cat gfwlist_ips.txt
-                exit 1
-              fi
-              mv temp.txt gfwlist_ips.txt
-            else
-              echo "警告：IP文件为空，跳过去重"
-            fi
-          else
-            echo "错误：IP文件不存在"
+            echo "错误：未找到域名文件"
             exit 1
           fi
           
-          # 统计结果
-          final_ip_count=$(wc -l gfwlist_ips.txt)
-          end_time=$(date +%s)
-          echo "==== 解析统计 ===="
-          echo "总耗时: $((end_time - start_time)) 秒"
-          echo "成功解析: $success_count 个域名"
-          echo "解析失败: $fail_count 个域名"
-          echo "最终IP数量: $final_ip_count 个"
+          # 解析域名（Node.js实现，支持多DNS服务器）
+          node -e "
+            const fs = require('fs');
+            const dns = require('dns');
+            const domains = fs.readFileSync('gfwlist_domains.txt', 'utf-8').split('\\n').filter(d => d.trim());
+            const ips = new Set();
+            const failedDomains = [];
+            const dnsServers = ['8.8.8.8', '1.1.1.1', '9.9.9.9', '84.200.69.80', '8.20.247.20'];
+            let successCount = 0;
+            let failCount = 0;
+            
+            console.log(\`开始解析 \${domains.length} 个域名\`);
+            
+            // 解析单个域名
+            async function resolveDomain(domain) {
+              for (const server of dnsServers) {
+                try {
+                  // 设置DNS服务器
+                  const resolver = new dns.Resolver();
+                  resolver.setServers([server]);
+                  resolver.setTimeout(5000);
+                  
+                  const addresses = await resolver.resolve4(domain);
+                  for (const ip of addresses) {
+                    ips.add(ip);
+                  }
+                  
+                  console.log(\`✓ 解析成功: \${domain} → \${addresses.join(', ')}\`);
+                  successCount++;
+                  return;
+                } catch (error) {
+                  console.log(\`✗ 解析失败 (\${server}): \${domain} → \${error.message}\`);
+                  continue;
+                }
+              }
+              
+              failedDomains.push(domain);
+              failCount++;
+            }
+            
+            // 并行解析（Promise.all）
+            const resolvePromises = domains.map(resolveDomain);
+            
+            Promise.all(resolvePromises)
+              .then(() => {
+                // 保存结果
+                fs.writeFileSync('gfwlist_ips.txt', [...ips].sort().join('\\n'));
+                fs.writeFileSync('failed_domains.txt', failedDomains.join('\\n'));
+                
+                console.log(\`解析完成:\`);
+                console.log(\`  成功: \${successCount} 个域名\`);
+                console.log(\`  失败: \${failCount} 个域名\`);
+                console.log(\`  生成IP: \${ips.size} 个\`);
+              })
+              .catch(error => {
+                console.error(\`解析过程出错: \${error.message}\`);
+                process.exit(1);
+              });
+          "
           
       - name: 验证结果文件
         run: |
@@ -143,34 +147,20 @@ jobs:
             exit 1
           fi
           
-          ip_count=$(wc -l gfwlist_ips.txt)
-          echo "IP文件包含 $ip_count 个有效IP"
+          ip_count=$(wc -l gfwlist_ips.txt | awk '{print $1}')
+          echo "IP文件包含 $ip_count 个IP"
           
-          # 显示前10个IP
-          if [ $ip_count -gt 0 ]; then
-            echo "==== 前10个IP ===="
-            head -n 10 gfwlist_ips.txt
-          else
-            echo "警告：IP文件为空"
-          fi
-          
-      - name: 提交结果文件
+      - name: 提交结果
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # 确保文件权限正确
-          chmod 777 gfwlist_ips.txt
-          
-          git add gfwlist_ips.txt
+          git add gfwlist_ips.txt gfwlist_domains.txt
           if git diff --staged --quiet; then
             echo "没有新内容更新"
           else
-            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d %H:%M')"
-            git commit -m "$commit_msg" || true  # 提交失败不中断
-            git push || { echo "推送失败，解析已完成" && exit 0; }
+            commit_msg="更新GFWList IP列表: $(date +'%Y-%m-%d %H:%M')"
+            git commit -m "$commit_msg"
+            git push
+            echo "已推送更新"
           fi
-          
-      - name: 流程完成确认
-        run: |
-          echo "==== 解析流程正常完成 ==== $(date)"
