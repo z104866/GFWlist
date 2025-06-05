@@ -1,63 +1,86 @@
-name: 自动下载并处理 GFWList
+name: GFWList 域名解析与 IP 生成（DNS 1.1.1.1）
 
 on:
   schedule:
     - cron: '0 12 * * *'  # UTC 12:00 = 北京时间 20:00
-  workflow_dispatch:  # 允许手动触发工作流
+  workflow_dispatch:
 
 jobs:
-  process-gfwlist:
+  resolve-dns:
     runs-on: ubuntu-latest
     
     steps:
-      - name: 检出代码仓库
+      - name: 检出代码
         uses: actions/checkout@v4
         
-      - name: 下载 GFWList 文件
+      - name: 下载 GFWList
         run: |
           wget -q https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt -O gfwlist.txt
-          echo "成功下载 GFWList 文件，路径：$(pwd)/gfwlist.txt"
+          echo "GFWList 下载完成"
           
       - name: 安装依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq  # 用于 JSON 处理（此处备用）
-          echo "依赖工具安装完成"
+          sudo apt-get install -y jq curl  # 用于 JSON 处理和 HTTP 请求
+          echo "工具安装完成"
           
-      - name: Base64 解码并提取 IP 地址
+      - name: Base64 解码并提取域名
         run: |
           # 解码 Base64 内容
           decoded_content=$(base64 -d gfwlist.txt)
           
-          # 提取 IP 地址和 CIDR 网段（正则匹配）
-          echo "$decoded_content" | grep -E -o "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\/[0-9]{1,2})?" | sort -u > ip_list.txt
+          # 提取域名（正则匹配常见格式）
+          echo "$decoded_content" | grep -E -o "[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+" | sort -u > domains.txt
           
-          # 统计提取结果
-          ip_count=$(wc -l ip_list.txt | awk '{print $1}')
-          echo "成功提取 $ip_count 个 IP 地址/段，保存至 ip_list.txt"
+          # 统计域名数量
+          domain_count=$(wc -l domains.txt | awk '{print $1}')
+          echo "成功提取 $domain_count 个域名，保存至 domains.txt"
           
-      - name: 查看生成文件内容（调试用）
+      - name: 通过 DNS 1.1.1.1 解析域名
         run: |
-          echo "==== gfwlist.txt 解码后部分内容 ===="
-          head -n 20 gfwlist.txt | base64 -d
-          echo "==== ip_list.txt 前 10 条 IP ===="
-          head -n 10 ip_list.txt
+          # 初始化 IP 列表
+          > ip_list.txt
           
-      - name: 提交并推送更新
+          # 遍历域名并解析
+          while read -r domain; do
+            if [ -n "$domain" ]; then
+              # 使用 DNS 1.1.1.1 API 解析 A 记录（JSON 格式）
+              response=$(curl -s "https://1.1.1.1/dns-query?name=$domain&type=A" -H "accept: application/dns-json")
+              
+              # 提取 IP 地址
+              ips=$(echo "$response" | jq -r '.Answer[].data' 2>/dev/null)
+              
+              if [ -n "$ips" ]; then
+                echo "$ips" | tr '\n' ' ' | sed 's/ /\n/g' >> ip_list.txt
+                echo "解析域名 $domain 获得 IP: $ips"
+              else
+                echo "无法解析域名 $domain"
+              fi
+            fi
+          done < domains.txt
+          
+          # 对 IP 去重并排序
+          sort -u ip_list.txt > temp.txt && mv temp.txt ip_list.txt
+          ip_count=$(wc -l ip_list.txt | awk '{print $1}')
+          echo "共解析出 $ip_count 个 IP 地址"
+          
+      - name: 生成 IP 段列表
+        run: |
+          # 将 IP 转换为 /24 网段（可调整为 /16 等精度）
+          awk -F. '{print $1"."$2"."$3".0/24"}' ip_list.txt | sort -u > ip_ranges.txt
+          range_count=$(wc -l ip_ranges.txt | awk '{print $1}')
+          echo "生成 $range_count 个 IP 段，保存至 ip_ranges.txt"
+          
+      - name: 提交结果
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # 添加文件到暂存区
-          git add gfwlist.txt ip_list.txt
-          
-          # 检查是否有变更
+          git add domains.txt ip_list.txt ip_ranges.txt
           if git diff --staged --quiet; then
-            echo "没有新的 IP 地址更新，跳过提交"
+            echo "没有新 IP 地址更新"
           else
-            # 提交并推送
-            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d %H:%M')"
+            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d')"
             git commit -m "$commit_msg"
             git push
-            echo "已推送更新：$commit_msg"
           fi
