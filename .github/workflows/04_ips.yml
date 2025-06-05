@@ -1,4 +1,4 @@
-name: 解析 GFWList
+name: 04_解析 GFWList
 
 on:
   schedule:
