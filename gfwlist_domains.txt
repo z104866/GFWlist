@@ -14,13 +14,11 @@
 12vpn.net
 1337x.to
 138.com
-14.102.250.19
 141hongkong.com
 141jj.com
 141tube.com
 1688.com.au
 173ng.com
-174.142.105.153
 177pic.info
 17t17p.com
 18board.com
@@ -66,7 +64,6 @@
 315lz.com
 32red.com
 36rain.com
-38.103.165.50
 3a5a.com
 3arabtv.com
 3boys2girls.com
@@ -86,7 +83,6 @@
 4pu.com
 4rbtv.com
 4shared.com
-50.7.31.230
 500px.com
 500px.org
 51.ca
@@ -108,11 +104,6 @@
 66.ca
 666kb.com
 666pool.cn
-67.220.91.15
-67.220.91.18
-67.220.91.23
-69.16.175.42
-69.65.19.160
 69shuba.cx
 6do.news
 6do.world
@@ -120,11 +111,9 @@
 6parkbbs.com
 6parker.com
 6parknews.com
-72.52.81.22
 7capture.com
 7cow.com
 8-d.com
-85.17.73.31
 85cc.net
 85cc.us
 881903.com
@@ -268,7 +257,6 @@ alwaysdata.net
 alwaysvpn.com
 am730.com.hk
 amazon.co.jp
-amazonaws.com
 amazonvideo.com
 ameblo.jp
 americangreencard.com
@@ -456,7 +444,6 @@ azerbaycan.tv
 azerimix.com
 azirevpn.com
 azubu.tv
-azurewebsites.net
 b-ok.cc
 b.hatena.ne.jp
 b0ne.com
@@ -715,6 +702,7 @@ bowenpress.com
 boxpn.com
 boxun.com
 boxun.tv
+boxunazurewebsites.net
 boxunblog.com
 boxunclub.com
 boyangu.com
@@ -898,6 +886,7 @@ cdn.softlayer.net
 cdn.statically.io
 cdn1.lp.saboom.com
 cdnews.com.tw
+cdni-scmp.com
 cdninstagram.com
 cdp1989.org
 cdp1998.org
@@ -2612,7 +2601,6 @@ hyperrate.com
 hypothes.is
 i-cable.com
 i-part.com.tw
-i-scmp.com
 i.111666.best
 i.lithium.com
 i1.hk
@@ -2695,6 +2683,7 @@ imdb.com
 img.ly
 imgasd.com
 imgchili.net
+imgpicturedip.com
 imgur.com
 imkev.com
 imlive.co
@@ -3986,7 +3975,6 @@ picacomic.com
 picacomiccn.com
 picasaweb.com
 picidae.net
-picturedip.com
 picturesocial.com
 picuki.com
 pigav.com
@@ -4361,6 +4349,7 @@ s.yimg.com
 s1.nudezz.com
 s1heng.com
 s1s1s1.com
+s3-ap-amazonaws.com
 s3-ap-northeast-1.amazonaws.com
 s3-ap-northeast-2.amazonaws.com
 s3-ap-southeast-1.amazonaws.com
@@ -5945,7 +5934,6 @@ xn--i2ru8q2qg.com
 xn--ngstr-lra8j.com
 xn--noss43i.com
 xn--oiq.cc
-xn--p8j9a0d9c9a.xn
 xnpool.com
 xnxx.com
 xpdo.net
@@ -6168,4 +6156,4 @@ zyxel.com
 zyzc9.com
 zzcartoon.com
 zzcloud.me
-zzux.com\n14.102.250.18
+zzux.com
