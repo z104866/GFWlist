@@ -1,4 +1,4 @@
-name: 04_GFWList 域名解析（Node.js版）
+name: GFWList 域名解析（Node.js版）
 
 on:
   schedule:
