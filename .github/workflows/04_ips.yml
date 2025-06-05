@@ -1,4 +1,4 @@
-name: 04_解析 GFWList 域名
+name: 04_解析 GFWList
 
 on:
   schedule:
