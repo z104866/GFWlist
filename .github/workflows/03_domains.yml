@@ -1,0 +1,84 @@
+name: 03_定时提取 GFWList 域名和 IP
+
+on:
+  schedule:
+    - cron: '20 20 * * *'  # UTC 20:20 = 北京时间 04:20
+  workflow_dispatch:
+
+jobs:
+  extract-gfwlist:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 检查解码文件是否存在
+        run: |
+          if [ ! -f gfwlist_dcode.txt ]; then
+            echo "错误：未找到 gfwlist_dcode.txt，请先完成解码"
+            exit 1
+          fi
+          echo "解码文件已存在，准备提取域名和IP..."
+          
+      - name: 提取域名和 IP 地址
+        run: |
+          # 提取域名和 IP 的核心逻辑
+          echo "正在提取域名和 IP..."
+          
+          # 1. 提取域名（处理各种规则格式）
+          domains=$(cat gfwlist_dcode.txt | \
+                   grep -v '^\[.*\]$' | grep -v '^!.*$' | grep -v '^@@.*$' | \
+                   sed 's/^||//' | sed 's/|$//' | sed 's/\/.*//' | \
+                   grep -E -o '([a-zA-Z0-9][-a-zA-Z0-9._]*)+\.[a-zA-Z]{2,}' | \
+                   sort -u)
+          
+          # 2. 提取 IP 地址
+          ips=$(cat gfwlist_dcode.txt | \
+                grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | \
+                sort -u)
+          
+          # 3. 合并域名和 IP，去重并排序
+          all_entries=$(echo "$domains\n$ips" | sort -u)
+          
+          # 4. 保存到文件
+          echo "$all_entries" > gfwlist_domains.txt
+          
+          # 统计结果
+          domain_count=$(echo "$domains" | wc -l | awk '{print $1}')
+          ip_count=$(echo "$ips" | wc -l | awk '{print $1}')
+          total_count=$(echo "$all_entries" | wc -l | awk '{print $1}')
+          
+          echo "提取完成："
+          echo "  域名数量: $domain_count"
+          echo "  IP 数量: $ip_count"
+          echo "  总计: $total_count 个条目"
+          
+      - name: 验证结果文件
+        run: |
+          if [ ! -f gfwlist_domains.txt ]; then
+            echo "错误：未生成域名和IP文件"
+            exit 1
+          fi
+          
+          count=$(wc -l gfwlist_domains.txt | awk '{print $1}')
+          echo "结果文件包含 $count 个条目"
+          
+          # 显示前10个条目（调试用）
+          echo "前10个条目："
+          head -n 10 gfwlist_domains.txt
+          
+      - name: 提交结果文件
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git add gfwlist_domains.txt
+          if git diff --staged --quiet; then
+            echo "没有新内容更新"
+          else
+            commit_msg="更新 GFWList 域名和IP: $(date +'%Y-%m-%d %H:%M')"
+            git commit -m "$commit_msg"
+            git push
+            echo "已推送更新"
+          fi
