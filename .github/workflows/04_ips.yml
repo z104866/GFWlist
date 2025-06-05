@@ -1,4 +1,4 @@
-name: 04_GFWList 域名解析（优化版，不生成失败域名文件）
+name: 04_GFWList 域名解析（多轮DNS服务器版）
 
 on:
   schedule:
@@ -69,7 +69,7 @@ jobs:
             console.log(\`提取完成，域名数量: \${domains.size}\`);
           "
           
-      - name: 解析域名获取IP（优化并发和超时）
+      - name: 解析域名获取IP（多轮DNS服务器）
         run: |
           if [ ! -f gfwlist_domains.txt ]; then
             echo "错误：未找到域名文件"
@@ -81,21 +81,24 @@ jobs:
             const dns = require('dns');
             const { promisify } = require('util');
             const domains = fs.readFileSync('gfwlist_domains.txt', 'utf-8').split('\\n').filter(d => d.trim());
-            const ips = new Set();
-            const dnsServers = ['1.1.1.1', '8.8.8.8']; // 只保留两个DNS服务器
-            let successCount = 0;
-            let failCount = 0;
+            const allIps = new Set();
+            let totalSuccess = 0;
+            let totalFail = 0;
             
-            console.log(\`开始解析 \${domains.length} 个域名，并发批次: 30\`);
+            // 三轮DNS服务器配置
+            const dnsRounds = [
+              { name: '第一轮', servers: ['1.1.1.1', '8.8.8.8'] },
+              { name: '第二轮', servers: ['9.9.9.9', '208.67.222.222'] }, // OpenDNS
+              { name: '第三轮', servers: ['223.5.5.5', '8.8.4.4'] }      // 阿里DNS + Google备用
+            ];
             
-            // 封装带超时的解析函数（3秒超时）
-            async function resolveWithTimeout(domain, server, timeout = 3000) {
+            console.log(\`开始解析 \${domains.length} 个域名，每轮50个域名，2秒超时\`);
+            
+            // 封装带超时的解析函数
+            async function resolveWithTimeout(domain, server, timeout = 2000) {
               return new Promise((resolve, reject) => {
                 const resolve4 = promisify(dns.resolve4).bind(dns);
-                
-                const timeoutId = setTimeout(() => {
-                  reject(new Error('解析超时'));
-                }, timeout);
+                const timeoutId = setTimeout(() => reject(new Error('解析超时')), timeout);
                 
                 resolve4(domain, { server })
                   .then(ips => {
@@ -109,65 +112,87 @@ jobs:
               });
             }
             
-            // 解析单个域名
-            async function resolveDomain(domain) {
-              for (const server of dnsServers) {
-                try {
-                  const addresses = await resolveWithTimeout(domain, server);
-                  for (const ip of addresses) {
-                    ips.add(ip);
+            // 单轮解析函数
+            async function resolveRound(round) {
+              const { name, servers } = round;
+              const roundIps = new Set();
+              let roundSuccess = 0;
+              let roundFail = 0;
+              
+              console.log(\`\n--- \${name} (DNS: \${servers.join(', ')}) ---\`);
+              
+              // 分批次解析（50个/批次）
+              for (let i = 0; i < domains.length; i += 50) {
+                const batch = domains.slice(i, i + 50);
+                console.log(\`  处理批次 \${i/50 + 1} / \${Math.ceil(domains.length/50)}\`);
+                
+                // 并行解析批次内的域名
+                await Promise.all(batch.map(async (domain) => {
+                  for (const server of servers) {
+                    try {
+                      const addresses = await resolveWithTimeout(domain, server);
+                      for (const ip of addresses) roundIps.add(ip);
+                      roundSuccess++;
+                      console.log(\`  ✓ 解析成功: \${domain} → \${addresses.join(', ')} (服务器: \${server})\`);
+                      return;
+                    } catch (error) {
+                      roundFail++;
+                      // console.log(\`  ✗ 解析失败 (\${server}): \${domain} → \${error.message}\`); // 可选：取消注释显示失败详情
+                    }
                   }
-                  
-                  console.log(\`✓ 解析成功: \${domain} → \${addresses.join(', ')} (服务器: \${server})\`);
-                  successCount++;
-                  return;
-                } catch (error) {
-                  console.log(\`✗ 解析失败 (\${server}): \${domain} → \${error.message}\`);
-                  failCount++;
-                  continue;
-                }
+                }));
               }
+              
+              console.log(\`\${name} 统计:\`);
+              console.log(\`  成功: \${roundSuccess} 个域名\`);
+              console.log(\`  失败: \${roundFail} 个域名\`);
+              console.log(\`  本轮IP: \${roundIps.size} 个\`);
+              
+              totalSuccess += roundSuccess;
+              totalFail += roundFail;
+              return roundIps;
             }
             
-            // 并行解析（30个域名/批次）
-            async function parallelResolve(domains, concurrency = 30) {
-              const results = [];
-              for (let i = 0; i < domains.length; i += concurrency) {
-                const batch = domains.slice(i, i + concurrency);
-                const batchResults = await Promise.all(batch.map(resolveDomain));
-                results.push(...batchResults);
-                console.log(\`完成批次 \${i/concurrency + 1} / \${Math.ceil(domains.length/concurrency)}\`);
+            // 执行三轮解析
+            async function runRounds() {
+              let roundResults = [];
+              for (const round of dnsRounds) {
+                const roundIps = await resolveRound(round);
+                roundResults.push(roundIps);
               }
-              return results;
+              
+              // 合并所有IP
+              roundResults.forEach(ips => {
+                ips.forEach(ip => allIps.add(ip));
+              });
+              
+              // 读取现有IP并去重
+              let existingIps = new Set();
+              if (fs.existsSync('gfwlist_ips.txt')) {
+                const existingContent = fs.readFileSync('gfwlist_ips.txt', 'utf-8');
+                existingIps = new Set(existingContent.split('\\n').filter(ip => ip.trim()));
+              }
+              
+              // 计算新增IP
+              const newIps = [...allIps].filter(ip => !existingIps.has(ip));
+              const finalIps = [...existingIps, ...newIps];
+              
+              // 写入IP文件（追加新IP）
+              if (newIps.length > 0) {
+                fs.appendFileSync('gfwlist_ips.txt', '\\n' + newIps.join('\\n'));
+                console.log(\`\n追加 \${newIps.length} 个新IP到文件\`);
+              } else {
+                console.log(\`\n没有新IP需要追加\`);
+              }
+              
+              console.log(\`\n==== 总解析统计 ====\`);
+              console.log(\`  总成功: \${totalSuccess} 个域名\`);
+              console.log(\`  总失败: \${totalFail} 个域名\`);
+              console.log(\`  新增IP: \${newIps.length} 个\`);
+              console.log(\`  总IP数量: \${allIps.size} 个\`);
             }
             
-            parallelResolve(domains)
-              .then(() => {
-                // 读取现有IP并去重
-                let existingIps = new Set();
-                if (fs.existsSync('gfwlist_ips.txt')) {
-                  const existingContent = fs.readFileSync('gfwlist_ips.txt', 'utf-8');
-                  existingIps = new Set(existingContent.split('\\n').filter(ip => ip.trim()));
-                }
-                
-                // 合并新IP并去重
-                const allIps = new Set([...existingIps, ...ips]);
-                
-                // 追加新IP到文件（保持原有顺序并去重）
-                const newIps = [...allIps].filter(ip => !existingIps.has(ip));
-                if (newIps.length > 0) {
-                  fs.appendFileSync('gfwlist_ips.txt', '\\n' + newIps.join('\\n'));
-                  console.log(\`追加 \${newIps.length} 个新IP到文件\`);
-                } else {
-                  console.log(\`没有新IP需要追加\`);
-                }
-                
-                console.log(\`解析完成:\`);
-                console.log(\`  成功: \${successCount} 个域名\`);
-                console.log(\`  失败: \${failCount} 个域名\`);
-                console.log(\`  新增IP: \${newIps.length} 个\`);
-                console.log(\`  总IP数量: \${allIps.size} 个\`);
-              })
+            runRounds()
               .catch(error => {
                 console.error(\`解析过程出错: \${error.message}\`);
                 process.exit(1);
