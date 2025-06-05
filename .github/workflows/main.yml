@@ -1,4 +1,4 @@
-name: GFWList 域名解析与 IP 生成（优化版）
+name: GFWList 域名解析与 IP 生成（Google DNS 8.8.8.8）
 
 on:
   schedule:
@@ -20,7 +20,7 @@ jobs:
             echo "错误：GFWList 下载失败"
             exit 1
           fi
-          echo "GFWList 下载完成，路径：$(pwd)/gfwlist.txt"
+          echo "GFWList 下载完成"
           
       - name: 安装依赖工具
         run: |
@@ -51,7 +51,7 @@ jobs:
           domain_count=$(wc -l domains.txt | awk '{print $1}')
           echo "成功提取 $domain_count 个域名，保存至 domains.txt"
           
-      - name: 通过 DNS 1.1.1.1 解析域名（优化版）
+      - name: 通过 Google DNS (8.8.8.8) 解析域名
         run: |
           if [ ! -f domains.txt ] || [ $(wc -l domains.txt) -eq 0 ]; then
             echo "警告：未找到可解析的域名，跳过解析"
@@ -72,8 +72,8 @@ jobs:
             if [ -n "$domain" ]; then
               echo "解析第 $count 个域名: $domain"
               
-              # 使用 DNS 1.1.1.1 API 解析 A 记录
-              response=$(curl -s "https://1.1.1.1/dns-query?name=$domain&type=A" -H "accept: application/dns-json")
+              # 使用 Google DNS-over-HTTPS API 解析 A 记录
+              response=$(curl -s "https://dns.google/resolve?name=$domain&type=A" -H "accept: application/dns-json")
               
               if [ $? -ne 0 ]; then
                 echo "  curl 请求失败，跳过此域名"
@@ -116,15 +116,6 @@ jobs:
           range_count=$(wc -l ip_ranges.txt | awk '{print $1}')
           echo "生成 $range_count 个 IP 段，保存至 ip_ranges.txt"
           
-      - name: 查看结果文件（调试用）
-        run: |
-          echo "==== domains.txt 前 5 个域名 ===="
-          head -n 5 domains.txt
-          echo "==== ip_list.txt 前 5 个 IP ===="
-          head -n 5 ip_list.txt
-          echo "==== ip_ranges.txt 前 5 个网段 ===="
-          head -n 5 ip_ranges.txt
-          
       - name: 提交结果
         run: |
           git config user.name "github-actions[bot]"
@@ -132,16 +123,9 @@ jobs:
           
           git add domains.txt ip_list.txt ip_ranges.txt
           if git diff --staged --quiet; then
-            echo "没有新 IP 地址更新，跳过提交"
+            echo "没有新 IP 地址更新"
           else
-            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d %H:%M')"
+            commit_msg="更新 GFWList IP 列表: $(date +'%Y-%m-%d')"
             git commit -m "$commit_msg"
-            
-            # 处理可能的推送错误
-            if git push 2>&1 | grep -q "permission denied"; then
-              echo "错误：推送权限不足，请检查 Actions 权限或 PAT 配置"
-              exit 1
-            fi
-            
-            echo "已推送更新：$commit_msg"
+            git push
           fi
