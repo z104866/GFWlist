@@ -1,4 +1,4 @@
-name: 03_定时提取 GFWList 域名和 IP
+name: 03_提取 GFWList 域名
 
 on:
   schedule:
