@@ -1,0 +1,54 @@
+name: 02_定时解码 GFWList 文件
+
+on:
+  schedule:
+    - cron: '10 20 * * *'  # UTC 20:10 = 北京时间 04:10
+  workflow_dispatch:
+
+jobs:
+  decode-gfwlist:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 检查原始文件是否存在
+        run: |
+          if [ ! -f gfwlist_original.txt ]; then
+            echo "错误：未找到 gfwlist_original.txt，请先下载原始文件"
+            exit 1
+          fi
+          echo "原始文件已存在，准备解码..."
+          
+      - name: Base64 解码文件
+        run: |
+          # 执行 Base64 解码
+          base64 -d gfwlist_original.txt > gfwlist_dcode.txt 2>/dev/null
+          
+          # 检查解码结果
+          if [ $? -ne 0 ] || [ ! -f gfwlist_dcode.txt ] || [ $(wc -c < gfwlist_dcode.txt) -lt 100 ]; then
+            echo "错误：Base64 解码失败或结果文件为空"
+            exit 1
+          fi
+          
+          echo "解码完成，保存为 gfwlist_dcode.txt，大小: $(wc -c < gfwlist_dcode.txt) 字节"
+          
+      - name: 提交解码后的文件
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 添加文件到仓库
+          git add gfwlist_dcode.txt
+          
+          # 检查是否有变更
+          if git diff --staged --quiet; then
+            echo "没有新文件更新"
+          else
+            # 提交变更并推送
+            commit_msg="更新 GFWList 解码文件: $(date +'%Y-%m-%d %H:%M')"
+            git commit -m "$commit_msg"
+            git push
+            echo "已推送更新: $commit_msg"
+          fi
