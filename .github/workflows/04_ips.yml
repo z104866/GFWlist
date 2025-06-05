@@ -1,4 +1,4 @@
-name: GFWList 域名解析（Node.js版）
+name: 04_GFWList 域名解析（修复版）
 
 on:
   schedule:
@@ -47,7 +47,6 @@ jobs:
             exit 1
           fi
           
-          # 提取域名（Node.js实现）
           node -e "
             const fs = require('fs');
             const content = fs.readFileSync('gfwlist_decoded.txt', 'utf-8');
@@ -57,11 +56,8 @@ jobs:
             for (const line of lines) {
               if (!line.trim() || line.startsWith('!') || line.startsWith('[') || line.startsWith('@@')) continue;
               
-              // 处理规则格式
               let domain = line.replace('||', '').replace('|', '').split('/')[0].trim();
-              // 移除通配符前缀
               domain = domain.replace('*.', '');
-              // 提取有效域名
               const match = domain.match(/[a-zA-Z0-9][-a-zA-Z0-9._]*\\.[a-zA-Z]{2,}$/);
               
               if (match) {
@@ -73,17 +69,17 @@ jobs:
             console.log(\`提取完成，域名数量: \${domains.size}\`);
           "
           
-      - name: 解析域名获取IP（Node.js版）
+      - name: 解析域名获取IP（修复setTimeout错误）
         run: |
           if [ ! -f gfwlist_domains.txt ]; then
             echo "错误：未找到域名文件"
             exit 1
           fi
           
-          # 解析域名（Node.js实现，支持多DNS服务器）
           node -e "
             const fs = require('fs');
             const dns = require('dns');
+            const { promisify } = require('util');
             const domains = fs.readFileSync('gfwlist_domains.txt', 'utf-8').split('\\n').filter(d => d.trim());
             const ips = new Set();
             const failedDomains = [];
@@ -93,21 +89,38 @@ jobs:
             
             console.log(\`开始解析 \${domains.length} 个域名\`);
             
+            // 封装带超时的解析函数
+            async function resolveWithTimeout(domain, server, timeout = 5000) {
+              return new Promise((resolve, reject) => {
+                const resolver = dns.promises.createResolver();
+                resolver.setServers([server]);
+                
+                const timeoutId = setTimeout(() => {
+                  reject(new Error('解析超时'));
+                }, timeout);
+                
+                resolver.resolve4(domain)
+                  .then(ips => {
+                    clearTimeout(timeoutId);
+                    resolve(ips);
+                  })
+                  .catch(error => {
+                    clearTimeout(timeoutId);
+                    reject(error);
+                  });
+              });
+            }
+            
             // 解析单个域名
             async function resolveDomain(domain) {
               for (const server of dnsServers) {
                 try {
-                  // 设置DNS服务器
-                  const resolver = new dns.Resolver();
-                  resolver.setServers([server]);
-                  resolver.setTimeout(5000);
-                  
-                  const addresses = await resolver.resolve4(domain);
+                  const addresses = await resolveWithTimeout(domain, server, 8000); // 8秒超时
                   for (const ip of addresses) {
                     ips.add(ip);
                   }
                   
-                  console.log(\`✓ 解析成功: \${domain} → \${addresses.join(', ')}\`);
+                  console.log(\`✓ 解析成功: \${domain} → \${addresses.join(', ')} (服务器: \${server})\`);
                   successCount++;
                   return;
                 } catch (error) {
@@ -120,12 +133,11 @@ jobs:
               failCount++;
             }
             
-            // 并行解析（Promise.all）
+            // 并行解析
             const resolvePromises = domains.map(resolveDomain);
             
             Promise.all(resolvePromises)
               .then(() => {
-                // 保存结果
                 fs.writeFileSync('gfwlist_ips.txt', [...ips].sort().join('\\n'));
                 fs.writeFileSync('failed_domains.txt', failedDomains.join('\\n'));
                 
@@ -155,7 +167,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          git add gfwlist_ips.txt gfwlist_domains.txt
+          git add gfwlist_ips.txt failed_domains.txt
           if git diff --staged --quiet; then
             echo "没有新内容更新"
           else
