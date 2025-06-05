@@ -1,4 +1,4 @@
-name: GFWList 域名提取
+name: GFWlist 定时转换
 
 on:
   schedule:
