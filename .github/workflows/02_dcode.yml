@@ -1,4 +1,4 @@
-name: 02_解码 GFWList 文件
+name: 02_解码 GFWList
 
 on:
   schedule:
