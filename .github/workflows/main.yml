@@ -1,26 +1,26 @@
-name: GFWList 多DNS并行解析优化
+name: GFWList 域名提取
 
 on:
   schedule:
-    - cron: '0 12 * * *'  # UTC 12:00 = 北京时间20:00
+    - cron: '0 12 * * *'  # UTC 12:00 = 北京时间 20:00
   workflow_dispatch:
 
 jobs:
-  resolve-dns:
+  extract-domains:
     runs-on: ubuntu-latest
     
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         
-      - name: 下载GFWList
+      - name: 下载 GFWList
         run: |
           wget -q https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt -O gfwlist.txt
           if [ $? -ne 0 ]; then
-            echo "错误：GFWList下载失败"
+            echo "错误：GFWList 下载失败"
             exit 1
           fi
-          echo "GFWList下载完成"
+          echo "GFWList 下载完成"
           
       - name: 安装依赖工具
         run: |
@@ -31,137 +31,55 @@ jobs:
             exit 1
           fi
           
-      - name: 解码并提取域名
+      - name: Base64 解码并提取域名
         run: |
           if [ ! -f gfwlist.txt ]; then
-            echo "错误：未找到gfwlist.txt"
+            echo "错误：未找到 gfwlist.txt"
             exit 1
           fi
           
+          # 解码 Base64 内容
           decoded_content=$(base64 -d gfwlist.txt 2>/dev/null)
           if [ $? -ne 0 ]; then
-            echo "错误：Base64解码失败"
+            echo "错误：Base64 解码失败"
             exit 1
           fi
           
-          # 提取域名并过滤非法格式
-          echo "$decoded_content" | grep -E -o "[a-zA-Z0-9][-a-zA-Z0-9._~%+]*(\.[a-zA-Z0-9][-a-zA-Z0-9._~%+]*)+" | sort -u > domains.txt
-          domain_count=$(wc -l domains.txt | awk '{print $1}')
-          echo "成功提取 $domain_count 个域名"
+          # 提取域名（处理不同格式的规则）
+          echo "正在提取域名..."
+          domains=$(echo "$decoded_content" | grep -v '^\[.*\]$' | grep -v '^!.*$' | grep -v '^@@.*$' | \
+                   sed 's/^||//' | sed 's/|$//' | sed 's/\/.*//' | \
+                   grep -E -o '[a-zA-Z0-9][-a-zA-Z0-9._]*\.[a-zA-Z]{2,}' | \
+                   sort -u)
           
-      - name: 过滤非法域名
+          # 保存到文件
+          echo "$domains" > gfwlist2dns.txt
+          
+          # 统计域名数量
+          domain_count=$(wc -l gfwlist2dns.txt | awk '{print $1}')
+          echo "成功提取 $domain_count 个唯一域名，保存至 gfwlist2dns.txt"
+          
+      - name: 验证提取结果
         run: |
-          grep -E '^[a-zA-Z0-9][-a-zA-Z0-9._~%+]*(\.[a-zA-Z0-9][-a-zA-Z0-9._~%+]*)+$' domains.txt > valid_domains.txt
-          mv valid_domains.txt domains.txt
-          filtered_count=$(wc -l domains.txt | awk '{print $1}')
-          echo "过滤后剩余 $filtered_count 个有效域名"
-          
-      - name: 多DNS并行解析域名
-        run: |
-          # 定义DNS服务器列表
-          dns_servers=("8.8.8.8" "8.8.4.4" "1.1.1.1" "1.0.0.1")
-          count=0
-          > ip_list.txt
-          
-          domain_count=$(wc -l domains.txt | awk '{print $1}')
-          if [ $domain_count -eq 0 ]; then
-            echo "警告：无有效域名可解析"
-            touch ip_list.txt
-            exit 0
+          if [ ! -f gfwlist2dns.txt ]; then
+            echo "错误：未生成域名列表文件"
+            exit 1
           fi
           
-          echo "开始解析 $domain_count 个域名，使用多DNS并行策略"
-          
-          while read -r domain; do
-            count=$((count+1))
-            if [ -n "$domain" ]; then
-              echo "解析第 $count 个域名: $domain"
-              all_ips=""
-              declare -A responses  # 关联数组存储各服务器响应
-              
-              # 并行发送解析请求
-              for server in "${dns_servers[@]}"; do
-                if [ "$server" == "8.8.8.8" ] || [ "$server" == "8.8.4.4" ]; then
-                  # Google DNS API
-                  response=$(curl -s "https://dns.google/resolve?name=$domain&type=A" -H "accept: application/dns-json" --max-time 3 &)
-                else
-                  # Cloudflare DNS API
-                  response=$(curl -s "https://$server/dns-query?name=$domain&type=A" -H "accept: application/dns-json" --max-time 3 &)
-                fi
-                responses[$server]=$response
-              done
-              
-              wait  # 等待所有请求完成
-              
-              # 合并各服务器解析结果
-              for server in "${dns_servers[@]}"; do
-                resp=${responses[$server]}
-                if [ -n "$resp" ]; then
-                  if [ "$server" == "8.8.8.8" ] || [ "$server" == "8.8.4.4" ]; then
-                    ips=$(echo "$resp" | jq -r '.Answer[].data // empty' 2>/dev/null)
-                  else
-                    ips=$(echo "$resp" | jq -r '.Answer[].data // empty' 2>/dev/null)
-                  fi
-                  if [ "$ips" != "empty" ]; then
-                    all_ips="$all_ips $ips"
-                  fi
-                fi
-              done
-              
-              # 去重并保存IP
-              unique_ips=$(echo "$all_ips" | tr ' ' '\n' | sort -u | tr '\n' ' ')
-              if [ -n "$unique_ips" ]; then
-                echo "$unique_ips" | tr ' ' '\n' >> ip_list.txt
-                echo "  解析成功，IP: $unique_ips"
-              else
-                echo "  所有DNS均无法解析 $domain"
-              fi
-            fi
-            
-            # 频率控制：每20个域名暂停15秒
-            if [ $((count % 20)) -eq 0 ]; then
-              echo "  暂停15秒，控制并发频率（已解析 $count 个）"
-              sleep 15
-            fi
-          done < domains.txt
-          
-          # 去重IP列表
-          sort -u ip_list.txt > temp.txt && mv temp.txt ip_list.txt
-          ip_count=$(wc -l ip_list.txt | awk '{print $1}')
-          echo "解析完成，共获得 $ip_count 个IP地址"
-          
-      - name: 生成IP段列表
-        run: |
-          if [ ! -f ip_list.txt ] || [ $(wc -l ip_list.txt) -eq 0 ]; then
-            echo "警告：无IP地址可生成网段"
-            touch ip_ranges.txt
-            exit 0
-          fi
-          
-          # 生成/24网段（可修改精度）
-          awk -F. '{print $1"."$2"."$3".0/24"}' ip_list.txt | sort -u > ip_ranges.txt
-          range_count=$(wc -l ip_ranges.txt | awk '{print $1}')
-          echo "生成 $range_count 个IP段"
-          
-      - name: 查看结果文件（调试用）
-        run: |
-          echo "==== 前5个域名 ===="
-          head -n 5 domains.txt
-          echo "==== 前5个IP ===="
-          head -n 5 ip_list.txt
-          echo "==== 前5个网段 ===="
-          head -n 5 ip_ranges.txt
+          # 显示前 10 个域名（调试用）
+          echo "前 10 个提取的域名："
+          head -n 10 gfwlist2dns.txt
           
       - name: 提交结果
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          git add domains.txt ip_list.txt ip_ranges.txt
+          git add gfwlist2dns.txt
           if git diff --staged --quiet; then
-            echo "没有新IP地址更新"
+            echo "没有新域名更新"
           else
-            commit_msg="更新GFWList IP列表: $(date +'%Y-%m-%d')"
+            commit_msg="更新 GFWList 域名列表: $(date +'%Y-%m-%d')"
             git commit -m "$commit_msg"
             git push
             echo "已推送更新"
