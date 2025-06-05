@@ -1,4 +1,4 @@
-name: 03_提取 GFWList 域名
+name: 03_提取 GFWList
 
 on:
   schedule:
