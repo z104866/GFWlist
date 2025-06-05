@@ -1,1 +1,46 @@
+name: 定时下载 GFWList 原始文件
 
+on:
+  schedule:
+    - cron: '0 20 * * *'  # UTC 20:00 = 北京时间 04:00
+  workflow_dispatch:
+
+jobs:
+  download-gfwlist:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 下载 GFWList 原始文件
+        run: |
+          # 下载文件并保存为 gfwlist_original.txt
+          curl -sSL https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt -o gfwlist_original.txt
+          
+          # 检查文件是否下载成功
+          if [ ! -f gfwlist_original.txt ] || [ $(wc -c < gfwlist_original.txt) -lt 100 ]; then
+            echo "错误：GFWList 下载失败或文件为空"
+            exit 1
+          fi
+          
+          echo "GFWList 原始文件下载完成，大小: $(wc -c < gfwlist_original.txt) 字节"
+          
+      - name: 提交下载的文件
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 添加文件到仓库
+          git add gfwlist_original.txt
+          
+          # 检查是否有变更
+          if git diff --staged --quiet; then
+            echo "没有新文件更新"
+          else
+            # 提交变更并推送
+            commit_msg="更新 GFWList 原始文件: $(date +'%Y-%m-%d %H:%M')"
+            git commit -m "$commit_msg"
+            git push
+            echo "已推送更新: $commit_msg"
+          fi
