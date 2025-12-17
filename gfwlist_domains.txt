@@ -553,6 +553,7 @@ bird.so
 bit-z.com
 bit.do
 bit.ly
+bitbaby.com
 bitbay.net
 bitchute.com
 bitcointalk.org
@@ -2398,6 +2399,7 @@ icoco.com
 iconpaper.org
 icu-project.org
 id.heroku.com
+idcflare.com
 idemocracy.asia
 identi.ca
 idiomconnection.com
