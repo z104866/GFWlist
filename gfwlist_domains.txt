@@ -3576,6 +3576,7 @@ pacopacomama.com
 padmanet.com
 page.link
 page2rss.com
+pages.dev
 paimon.moe
 palacemoon.com
 paljorpublications.com
@@ -4105,6 +4106,7 @@ seed4.me
 seesmic.com
 seevpn.com
 seezone.net
+sef.org.tw
 sehuatang.net
 sehuatang.org
 sejie.com
@@ -5412,6 +5414,7 @@ www.ajsands.com
 www.aolnews.com
 www.bing.com
 www.dwheeler.com
+www.hoyolab.com
 www.klip.me
 www.lorenzetti.com.br
 www.moztw.org
