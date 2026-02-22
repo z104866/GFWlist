@@ -3233,6 +3233,7 @@ topbtc.com
 topsy.com
 toptip.ca
 toptoon.net
+tor.eff.org
 torguard.net
 torlock.com
 torproject.org
@@ -3363,6 +3364,7 @@ unblocksit.es
 underwoodammo.com
 unholyknight.com
 unirule.cloud
+uniswap.org
 unknownspace.org
 unmineable.com
 unseen.is
